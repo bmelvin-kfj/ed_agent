@@ -1,0 +1,12 @@
+{
+  "status": "success",
+  "extracted_at": 1779633151.704468,
+  "account_id": "8602",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "X-Token": "b9ad382d-56a2-40cb-a2ef-ee91118b96a3",
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  "token": "b9ad382d-56a2-40cb-a2ef-ee91118b96a3"
+}
