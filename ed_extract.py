@@ -12,14 +12,16 @@ from typing import Any
 
 try:
     from dotenv import load_dotenv
+    from fastapi import FastAPI, Header, HTTPException
     from playwright.sync_api import Browser, BrowserContext, Page, Response, sync_playwright
 except ImportError as exc:
     raise SystemExit(
         "Dependances manquantes. Installez-les avec :\n"
-        "python -m pip install playwright python-dotenv\n"
+        "python -m pip install playwright python-dotenv fastapi uvicorn"
         "Puis installez le navigateur : python -m playwright install chromium"
     ) from exc
 
+load_dotenv()
 
 LOGIN_URL = "https://www.ecoledirecte.com/login"
 HOME_URL_FRAGMENT = "/Eleves/8602"
@@ -29,6 +31,8 @@ REQUEST_TIMEOUT = 30000
 API_BASE_URL = "https://api.ecoledirecte.com/v3"
 REFERENCE_DATE = date(2026, 5, 23)
 HOMEWORK_DAYS_AHEAD = 7
+DATA_JSON_PATH = Path("data.json")
+app = FastAPI(title="ed_extract-api")
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -40,7 +44,7 @@ DOUBLE_AUTH_ANSWERS = {
     "quelle est votre date de naissance ?": "21/11/2011",
     "quelle est votre classe ?": "310",
     "quel est votre mois de naissance ?": "novembre",
-    "datenaissance": "21/11/2011",
+    "cahier": "21/11/2011",
     "quel est votre jour de naissance ?": "21",
     "quel est le nom de famille de votre professeur principal ?": "GRACIA M.",
 }
@@ -62,6 +66,40 @@ MONTHS_MAPPING = {
     "decembre": 11,
     "décembre": 11,
 }
+
+
+def _require_api_key(api_key: str | None) -> None:
+    expected_api_key = os.getenv("API_KEY", "").strip()
+
+    if not expected_api_key:
+        raise HTTPException(status_code=500, detail="La variable d'environnement API_KEY n'est pas configurée.")
+
+    if not api_key or api_key != expected_api_key:
+        raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
+
+
+@app.get("/data")
+def get_data(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
+    _require_api_key(api_key)
+
+    if not DATA_JSON_PATH.exists() or DATA_JSON_PATH.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="Le fichier data.json est introuvable ou vide.")
+
+    try:
+        return json.loads(DATA_JSON_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=404, detail="Le fichier data.json est invalide ou illisible.") from exc
+
+
+@app.post("/trigger-extraction")
+def trigger_extraction(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
+    _require_api_key(api_key)
+    exit_code = run_extraction()
+
+    if exit_code != 0:
+        raise HTTPException(status_code=500, detail="L'extraction a échoué. Consultez les logs du serveur.")
+
+    return {"status": "ok", "message": "Extraction lancée avec succès."}
 
 
 class EcoleDirecteAuthError(RuntimeError):
@@ -878,7 +916,7 @@ def load_credentials() -> tuple[str, str]:
     return username, password
 
 
-def main() -> int:
+def run_extraction() -> int:
     try:
         username, password = load_credentials()
         manager = EcoleDirecteSessionManager(username, password)
@@ -889,5 +927,14 @@ def main() -> int:
         return 1
 
 
+def main() -> int:
+    return run_extraction()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--run" in sys.argv:
+        sys.exit(run_extraction())
+
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=5000)
