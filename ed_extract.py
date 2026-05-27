@@ -44,7 +44,7 @@ DOUBLE_AUTH_ANSWERS = {
     "quelle est votre date de naissance ?": "21/11/2011",
     "quelle est votre classe ?": "310",
     "quel est votre mois de naissance ?": "novembre",
-    "cahier": "21/11/2011",
+    "Quelle est votre année de naissance ?": "2011",
     "quel est votre jour de naissance ?": "21",
     "quel est le nom de famille de votre professeur principal ?": "GRACIA M.",
 }
@@ -78,17 +78,33 @@ def _require_api_key(api_key: str | None) -> None:
         raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
 
 
+def _resolve_data_source() -> Path | None:
+    if DATA_JSON_PATH.exists() and DATA_JSON_PATH.stat().st_size > 0:
+        return DATA_JSON_PATH
+
+    if not EXPORT_DIR.exists():
+        return None
+
+    exports = sorted(
+        EXPORT_DIR.glob("ecoledirecte_export_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return exports[0] if exports else None
+
+
 @app.get("/data")
 def get_data(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
     _require_api_key(api_key)
 
-    if not DATA_JSON_PATH.exists() or DATA_JSON_PATH.stat().st_size == 0:
-        raise HTTPException(status_code=404, detail="Le fichier data.json est introuvable ou vide.")
+    source_path = _resolve_data_source()
+    if not source_path or not source_path.exists() or source_path.stat().st_size == 0:
+        raise HTTPException(status_code=404, detail="Le fichier data.json est introuvable ou vide, et aucun export existant n'a été trouvé.")
 
     try:
-        return json.loads(DATA_JSON_PATH.read_text(encoding="utf-8"))
+        return json.loads(source_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=404, detail="Le fichier data.json est invalide ou illisible.") from exc
+        raise HTTPException(status_code=404, detail=f"Le fichier JSON {source_path.name} est invalide ou illisible.") from exc
 
 
 @app.post("/trigger-extraction")
