@@ -46,7 +46,7 @@ DOUBLE_AUTH_ANSWERS = {
     "quelle est votre date de naissance ?": "21/11/2011",
     "quelle est votre classe ?": "310",
     "quel est votre mois de naissance ?": "novembre",
-    "Quelle est votre année de naissance ?": "2011",
+    "QUELLE EST VOTRE ANNÉE DE NAISSANCE ?": "2011",
     "quel est votre jour de naissance ?": "21",
     "quel est le nom de famille de votre professeur principal ?": "GRACIA M.",
 }
@@ -175,7 +175,7 @@ class EcoleDirecteExtractor:
     def _human_pause(self, min_ms: int = 700, max_ms: int = 1800) -> None:
         time.sleep(random.randint(min_ms, max_ms) / 1000.0)
 
-    def _handle_api_response(self, response: PlaywrightResponse) -> None:
+    def _handle_api_response(self, response: Response) -> None:
         if "api.ecoledirecte.com" not in response.url:
             return
 
