@@ -12,8 +12,8 @@ from typing import Any
 
 try:
     from dotenv import load_dotenv
-    from fastapi import FastAPI, Header, HTTPException
-    from playwright.sync_api import Browser, BrowserContext, Page, Response, sync_playwright
+    from fastapi import FastAPI, Header, HTTPException, Response
+    from playwright.sync_api import Browser, BrowserContext, Page, Response as PlaywrightResponse, sync_playwright
 except ImportError as exc:
     raise SystemExit(
         "Dependances manquantes. Installez-les avec :\n"
@@ -21,17 +21,19 @@ except ImportError as exc:
         "Puis installez le navigateur : python -m playwright install chromium"
     ) from exc
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 LOGIN_URL = "https://www.ecoledirecte.com/login"
 HOME_URL_FRAGMENT = "/Eleves/8602"
-TOKEN_SAVED_FILE = Path("ed_session_config.json")
-EXPORT_DIR = Path("exports")
+os.chdir(BASE_DIR)
+TOKEN_SAVED_FILE = BASE_DIR / "ed_session_config.json"
+EXPORT_DIR = BASE_DIR / "exports"
 REQUEST_TIMEOUT = 30000
 API_BASE_URL = "https://api.ecoledirecte.com/v3"
 REFERENCE_DATE = date(2026, 5, 23)
 HOMEWORK_DAYS_AHEAD = 7
-DATA_JSON_PATH = Path("data.json")
+DATA_JSON_PATH = BASE_DIR / "data.json"
 app = FastAPI(title="ed_extract-api")
 
 USER_AGENT = (
@@ -69,16 +71,24 @@ MONTHS_MAPPING = {
 
 
 def _require_api_key(api_key: str | None) -> None:
-    expected_api_key = os.getenv("API_KEY", "").strip()
+    expected_api_key = os.getenv("ED_API_KEY", "").strip() or os.getenv("API_KEY", "").strip()
 
     if not expected_api_key:
-        raise HTTPException(status_code=500, detail="La variable d'environnement API_KEY n'est pas configurée.")
+        raise HTTPException(status_code=500, detail="La variable d'environnement ED_API_KEY n'est pas configurée.")
 
     if not api_key or api_key != expected_api_key:
         raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
 
 
 def _resolve_data_source() -> Path | None:
+    candidates = sorted(
+        BASE_DIR.glob("data_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+
     if DATA_JSON_PATH.exists() and DATA_JSON_PATH.stat().st_size > 0:
         return DATA_JSON_PATH
 
@@ -93,29 +103,57 @@ def _resolve_data_source() -> Path | None:
     return exports[0] if exports else None
 
 
+def _run_data_extract() -> Path:
+    try:
+        import data_extract
+    except ImportError as exc:
+        raise RuntimeError("Impossible d'importer data_extract.py") from exc
+
+    os.chdir(BASE_DIR)
+    data_extract.main()
+
+    generated_file = BASE_DIR / data_extract.OUTPUT_DATA_FILE
+    if not generated_file.exists() or generated_file.stat().st_size == 0:
+        raise RuntimeError("data_extract.py n'a pas généré le fichier JSON attendu.")
+
+    new_file = BASE_DIR / f"data_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    new_file.write_text(generated_file.read_text(encoding="utf-8"), encoding="utf-8")
+    return new_file
+
+
+def _run_full_extraction() -> Path:
+    """Force l'authentification live et génère un nouveau fichier JSON d'extraction."""
+    os.chdir(BASE_DIR)
+    username, password = load_credentials()
+    manager = EcoleDirecteSessionManager(username, password)
+    manager.run_auth_workflow()
+
+    output_path = _run_data_extract()
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError("Aucune donnée JSON n'a été générée après l'extraction live.")
+    return output_path
+
+
 @app.get("/data")
 def get_data(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
     _require_api_key(api_key)
 
-    source_path = _resolve_data_source()
-    if not source_path or not source_path.exists() or source_path.stat().st_size == 0:
-        raise HTTPException(status_code=404, detail="Le fichier data.json est introuvable ou vide, et aucun export existant n'a été trouvé.")
-
     try:
-        return json.loads(source_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=404, detail=f"Le fichier JSON {source_path.name} est invalide ou illisible.") from exc
+        output_path = _run_full_extraction()
+        return Response(output_path.read_text(encoding="utf-8"), media_type="application/json")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
 
 @app.post("/trigger-extraction")
-def trigger_extraction(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
+def trigger_extraction(api_key: str | None = Header(default=None, alias="API_KEY")) -> Response:
     _require_api_key(api_key)
-    exit_code = run_extraction()
 
-    if exit_code != 0:
-        raise HTTPException(status_code=500, detail="L'extraction a échoué. Consultez les logs du serveur.")
-
-    return {"status": "ok", "message": "Extraction lancée avec succès."}
+    try:
+        output_path = _run_full_extraction()
+        return Response(output_path.read_text(encoding="utf-8"), media_type="application/json")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
 
 class EcoleDirecteAuthError(RuntimeError):
@@ -137,7 +175,7 @@ class EcoleDirecteExtractor:
     def _human_pause(self, min_ms: int = 700, max_ms: int = 1800) -> None:
         time.sleep(random.randint(min_ms, max_ms) / 1000.0)
 
-    def _handle_api_response(self, response: Response) -> None:
+    def _handle_api_response(self, response: PlaywrightResponse) -> None:
         if "api.ecoledirecte.com" not in response.url:
             return
 
@@ -937,6 +975,10 @@ def run_extraction() -> int:
         username, password = load_credentials()
         manager = EcoleDirecteSessionManager(username, password)
         manager.run_auth_workflow()
+
+        if not _run_data_extract():
+            return 1
+
         return 0
     except Exception as exc:
         print(f"\n[ECHEC] Erreur d'execution : {exc}", file=sys.stderr)

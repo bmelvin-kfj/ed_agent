@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -10,12 +11,13 @@ from fastapi.responses import JSONResponse
 
 from data_extract import calculate_academic_year, load_session, make_api_request, safe_base64_decode
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 APP_NAME = "ecoledirecte-api"
 CACHE_TTL_SECONDS = 60 * 60
 CACHE = {"current": None, "expires_at": 0}
-API_KEY = os.getenv("ED_API_KEY", "")
+API_KEY = os.getenv("ED_API_KEY", "").strip() or os.getenv("API_KEY", "").strip()
 
 app = FastAPI(title=APP_NAME, description="Pont FastAPI pour exposer des données École Directe en JSON.")
 

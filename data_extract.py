@@ -89,27 +89,28 @@ def make_api_request(url: str, headers: Dict[str, str], payload: Optional[Dict[s
 def get_student_id(session_data: Dict[str, Any]) -> str:
     """
     Dynamically identifies the student ID to query.
-    1. Checks the command-line arguments.
+    1. Checks the command-line arguments only when they contain a valid numeric ID.
     2. Checks the session file.
     3. Checks environment variables (.env / OS environment).
     4. Falls back to default '8602'.
     """
     if len(sys.argv) > 1:
-        return sys.argv[1]
-    
+        candidate = sys.argv[1]
+        if candidate.isdigit():
+            return candidate
+        print(f"[!] Ignoring non-numérique argv student ID: {candidate}")
+
     # Check if student ID exists inside session config
-    if "eleve_id" in session_data:
-        return str(session_data["eleve_id"])
-    if "student_id" in session_data:
-        return str(session_data["student_id"])
-        
+    for key in ("eleve_id", "student_id", "account_id"):
+        if key in session_data and session_data[key] is not None:
+            return str(session_data[key])
+
     # Check environment variable
     env_id = os.getenv("ED_STUDENT_ID")
     if env_id:
         return env_id
-        
-    return DEFAULT_ELEVE_ID
 
+    return DEFAULT_ELEVE_ID
 
 def main() -> None:
     print("=" * 60)
