@@ -13,6 +13,7 @@ from typing import Any
 try:
     from dotenv import load_dotenv
     from fastapi import FastAPI, Header, HTTPException, Response
+    from fastapi.responses import FileResponse
     from playwright.sync_api import Browser, BrowserContext, Page, Response as PlaywrightResponse, sync_playwright
 except ImportError as exc:
     raise SystemExit(
@@ -70,13 +71,14 @@ MONTHS_MAPPING = {
 }
 
 
-def _require_api_key(api_key: str | None) -> None:
+def _require_api_key(api_key: str | None, x_api_key: str | None = None) -> None:
     expected_api_key = os.getenv("ED_API_KEY", "").strip() or os.getenv("API_KEY", "").strip()
 
     if not expected_api_key:
         raise HTTPException(status_code=500, detail="La variable d'environnement ED_API_KEY n'est pas configurée.")
 
-    if not api_key or api_key != expected_api_key:
+    provided_key = api_key or x_api_key
+    if not provided_key or provided_key != expected_api_key:
         raise HTTPException(status_code=401, detail="Clé API invalide ou absente.")
 
 
@@ -121,37 +123,72 @@ def _run_data_extract() -> Path:
     return new_file
 
 
+def _resolve_latest_export_file() -> Path:
+    if not EXPORT_DIR.exists():
+        raise RuntimeError("Le dossier d'export n'existe pas.")
+
+    exports = sorted(
+        EXPORT_DIR.glob("ecoledirecte_export_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not exports:
+        raise RuntimeError("Aucun fichier d'export trouvé dans le dossier exports/.")
+    return exports[0]
+
+
 def _run_full_extraction() -> Path:
-    """Force l'authentification live et génère un nouveau fichier JSON d'extraction."""
+    """Force l'authentification live et récupère le dernier export JSON du dossier exports."""
     os.chdir(BASE_DIR)
     username, password = load_credentials()
     manager = EcoleDirecteSessionManager(username, password)
     manager.run_auth_workflow()
 
-    output_path = _run_data_extract()
+    time.sleep(5)
+    output_path = _resolve_latest_export_file()
     if not output_path.exists() or output_path.stat().st_size == 0:
-        raise RuntimeError("Aucune donnée JSON n'a été générée après l'extraction live.")
+        raise RuntimeError("Aucun export JSON valide n'a été trouvé après l'extraction live.")
     return output_path
 
 
 @app.get("/data")
-def get_data(api_key: str | None = Header(default=None, alias="API_KEY")) -> dict[str, Any]:
-    _require_api_key(api_key)
+def get_data(
+    api_key: str | None = Header(default=None, alias="API_KEY"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> FileResponse:
+    _require_api_key(api_key, x_api_key)
 
     try:
         output_path = _run_full_extraction()
-        return Response(output_path.read_text(encoding="utf-8"), media_type="application/json")
+        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
 
+@app.get("/latest-export")
+def latest_export(
+    api_key: str | None = Header(default=None, alias="API_KEY"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> FileResponse:
+    _require_api_key(api_key, x_api_key)
+
+    try:
+        output_path = _resolve_latest_export_file()
+        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Aucun export disponible : {exc}") from exc
+
+
 @app.post("/trigger-extraction")
-def trigger_extraction(api_key: str | None = Header(default=None, alias="API_KEY")) -> Response:
-    _require_api_key(api_key)
+def trigger_extraction(
+    api_key: str | None = Header(default=None, alias="API_KEY"),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> FileResponse:
+    _require_api_key(api_key, x_api_key)
 
     try:
         output_path = _run_full_extraction()
-        return Response(output_path.read_text(encoding="utf-8"), media_type="application/json")
+        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
