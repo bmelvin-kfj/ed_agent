@@ -930,8 +930,8 @@ class EcoleDirecteSessionManager:
 
     def run_auth_workflow(self) -> dict[str, Any]:
         with sync_playwright() as p:
-            print("Lancement du navigateur...")
-            browser: Browser = p.chromium.launch(headless=False)
+            print("Lancement du navigateur en mode headless...")
+            browser: Browser = p.chromium.launch(headless=True)
             context: BrowserContext = browser.new_context(
                 user_agent=USER_AGENT,
                 viewport={"width": 1280, "height": 720},
