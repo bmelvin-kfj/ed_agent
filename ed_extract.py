@@ -13,7 +13,7 @@ from typing import Any
 try:
     from dotenv import load_dotenv
     from fastapi import FastAPI, Header, HTTPException, Response
-    from fastapi.responses import FileResponse
+    from fastapi.responses import JSONResponse
     from playwright.sync_api import Browser, BrowserContext, Page, Response as PlaywrightResponse, sync_playwright
 except ImportError as exc:
     raise SystemExit(
@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 LOGIN_URL = "https://www.ecoledirecte.com/login"
-HOME_URL_FRAGMENT = "/Eleves/8602"
+HOME_URL_FRAGMENT = "/Eleves/"
 os.chdir(BASE_DIR)
 TOKEN_SAVED_FILE = BASE_DIR / "ed_session_config.json"
 EXPORT_DIR = BASE_DIR / "exports"
@@ -43,11 +43,21 @@ USER_AGENT = (
     "Chrome/122.0.0.0 Safari/537.36"
 )
 
+DASHBOARD_SELECTORS = (
+    ".home-page, .dashboard, .main-content, #page-accueil, "
+    "main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]"
+)
+
+
+def _looks_like_dashboard_url(url: str) -> bool:
+    return bool(re.search(r"/Eleves/\d+(?:/|$)", url or ""))
+
+
 DOUBLE_AUTH_ANSWERS = {
     "quelle est votre date de naissance ?": "21/11/2011",
     "quelle est votre classe ?": "310",
     "quel est votre mois de naissance ?": "novembre",
-    "QUELLE EST VOTRE ANNÉE DE NAISSANCE ?": "2011",
+    "quelle est votre année de naissance ?": "2011",
     "quel est votre jour de naissance ?": "21",
     "quel est le nom de famille de votre professeur principal ?": "GRACIA M.",
 }
@@ -155,12 +165,12 @@ def _run_full_extraction() -> Path:
 def get_data(
     api_key: str | None = Header(default=None, alias="API_KEY"),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> FileResponse:
+) -> JSONResponse:
     _require_api_key(api_key, x_api_key)
 
     try:
         output_path = _run_full_extraction()
-        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
+        return JSONResponse(content=json.loads(output_path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
@@ -169,12 +179,12 @@ def get_data(
 def latest_export(
     api_key: str | None = Header(default=None, alias="API_KEY"),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> FileResponse:
+) -> JSONResponse:
     _require_api_key(api_key, x_api_key)
 
     try:
         output_path = _resolve_latest_export_file()
-        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
+        return JSONResponse(content=json.loads(output_path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Aucun export disponible : {exc}") from exc
 
@@ -183,12 +193,12 @@ def latest_export(
 def trigger_extraction(
     api_key: str | None = Header(default=None, alias="API_KEY"),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> FileResponse:
+) -> JSONResponse:
     _require_api_key(api_key, x_api_key)
 
     try:
         output_path = _run_full_extraction()
-        return FileResponse(output_path, media_type="application/json", filename=output_path.name)
+        return JSONResponse(content=json.loads(output_path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"L'extraction a échoué : {exc}") from exc
 
@@ -697,6 +707,30 @@ class EcoleDirecteExtractor:
             self.sections["devoirs_semaine_a_venir"] = result
             self.failures.append({"section": "devoirs_semaine_a_venir", "path": "Cahier de textes", "error": str(exc)})
 
+    def _compact_export_value(self, value: Any, max_text_chars: int = 600) -> Any:
+        if isinstance(value, dict):
+            compacted: dict[str, Any] = {}
+            for key, item in value.items():
+                if key in {"dom_structure", "network_api_responses"}:
+                    continue
+                if key == "text" and isinstance(item, str):
+                    compacted[key] = item if len(item) <= max_text_chars else item[:max_text_chars] + "\n…[texte tronqué]"
+                else:
+                    compacted[key] = self._compact_export_value(item, max_text_chars)
+            return compacted
+
+        if isinstance(value, list):
+            if len(value) > 20:
+                return [self._compact_export_value(item, max_text_chars) for item in value[:20]] + [
+                    {"_truncated": True, "remaining_items": len(value) - 20}
+                ]
+            return [self._compact_export_value(item, max_text_chars) for item in value]
+
+        return value
+
+    def _compact_export_payload(self, payload: Any) -> Any:
+        return self._compact_export_value(payload)
+
     def _extract_ui_pages(self) -> None:
         pages = [
             ("accueil", "Accueil"),
@@ -775,7 +809,8 @@ class EcoleDirecteExtractor:
 
         export = {
             "format": "ecoledirecte_export_ai_ready",
-            "version": 1,
+            "version": 2,
+            "mode": "compact",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "source": {
                 "site": "EcoleDirecte",
@@ -784,16 +819,16 @@ class EcoleDirecteExtractor:
                 "reference_date": REFERENCE_DATE.isoformat(),
             },
             "notice": (
-                "Export JSON cible pour lecture par IA : notes, vie scolaire, deux derniers messages, "
-                "dernier brouillon et devoirs de la semaine a venir."
+                "Export JSON compact pour IA : uniquement les informations utiles, sans snapshots DOM et "
+                "sans blobs de texte complet."
             ),
-            "donnees": self.sections,
+            "donnees": self._compact_export_payload(self.sections),
             "erreurs_extraction": self.failures,
         }
 
         EXPORT_DIR.mkdir(exist_ok=True)
         output_path = EXPORT_DIR / f"ecoledirecte_export_{time.strftime('%Y%m%d_%H%M%S')}.json"
-        output_path.write_text(json.dumps(export, indent=2, ensure_ascii=False), encoding="utf-8")
+        output_path.write_text(json.dumps(export, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         return output_path.resolve()
 
 
@@ -829,13 +864,14 @@ class EcoleDirecteSessionManager:
 
     def _wait_for_login_result(self, page: Page) -> None:
         page.wait_for_function(
-            """
+            r"""
             homeUrlFragment => {
-                const dashboardSelector = ".home-page, .dashboard, .main-content, #page-accueil";
+                const dashboardSelector = ".home-page, .dashboard, .main-content, #page-accueil, main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]";
                 return Boolean(
                     document.querySelector("#formQuestions2FA")
                     || document.querySelector(dashboardSelector)
                     || location.href.includes(homeUrlFragment)
+                    || /\/Eleves\/\d+(?:\/|$)/.test(location.href)
                 );
             }
             """,
@@ -844,11 +880,18 @@ class EcoleDirecteSessionManager:
         )
 
     def _wait_for_homepage(self, page: Page) -> None:
-        dashboard_selector = ".home-page, .dashboard, .main-content, #page-accueil"
         try:
             page.wait_for_url(f"**{HOME_URL_FRAGMENT}**", timeout=15000)
         except Exception:
-            page.wait_for_selector(dashboard_selector, timeout=15000)
+            page.wait_for_function(
+                r"""
+                () => Boolean(
+                    document.querySelector(".home-page, .dashboard, .main-content, #page-accueil, main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]")
+                    || /\/Eleves\/\d+(?:\/|$)/.test(location.href)
+                )
+                """,
+                timeout=15000,
+            )
 
     def _get_account_id(self, page: Page) -> str:
         match = re.search(r"/Eleves/(\d+)", page.url)
