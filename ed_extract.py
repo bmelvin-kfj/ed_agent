@@ -148,8 +148,23 @@ def _resolve_latest_export_file() -> Path:
 
 
 def _run_full_extraction() -> Path:
-    """Force l'authentification live et récupère le dernier export JSON du dossier exports."""
+    """Tente d'utiliser la session sauvegardée, puis retombe sur l'auth live si nécessaire."""
     os.chdir(BASE_DIR)
+
+    if TOKEN_SAVED_FILE.exists():
+        try:
+            saved = json.loads(TOKEN_SAVED_FILE.read_text(encoding="utf-8"))
+            token = saved.get("token") or (saved.get("headers") or {}).get("X-Token")
+            if token:
+                print("[session] Session sauvegardée détectée ; utilisation du flux de données existant.")
+                try:
+                    return _run_data_extract()
+                except Exception as exc:
+                    print(f"[session] Échec du flux sauvegardé : {exc}")
+        except Exception as exc:
+            print(f"[session] Session sauvegardée invalide : {exc}")
+
+    print("[session] Aucune session valide trouvée ; tentative d'authentification live.")
     username, password = load_credentials()
     manager = EcoleDirecteSessionManager(username, password)
     manager.run_auth_workflow()
@@ -846,8 +861,12 @@ class EcoleDirecteSessionManager:
         if "api.ecoledirecte.com" not in response.url:
             return
 
-        headers = response.request.headers
-        token = headers.get("x-token")
+        response_headers = getattr(response, "headers", {}) or {}
+        request_headers = getattr(response, "request", None)
+        request_headers = getattr(request_headers, "headers", {}) or {}
+
+        token = response_headers.get("x-token") or response_headers.get("X-Token")
+        token = token or request_headers.get("x-token") or request_headers.get("X-Token")
         if not token or token == self.extracted_token:
             return
 
@@ -859,8 +878,10 @@ class EcoleDirecteSessionManager:
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        if "x-gtk" in headers:
-            self.extracted_headers["X-Gtk"] = headers["x-gtk"]
+        x_gtk = response_headers.get("x-gtk") or response_headers.get("X-Gtk")
+        x_gtk = x_gtk or request_headers.get("x-gtk") or request_headers.get("X-Gtk")
+        if x_gtk:
+            self.extracted_headers["X-Gtk"] = x_gtk
 
     def _wait_for_login_result(self, page: Page) -> None:
         page.wait_for_function(
