@@ -200,6 +200,12 @@ def latest_export(
 
     try:
         output_path = _resolve_latest_export_file()
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError("Export inexistant ou vide.")
+    except Exception:
+        output_path = _run_full_extraction()
+
+    try:
         return JSONResponse(content=json.loads(output_path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Aucun export disponible : {exc}") from exc
