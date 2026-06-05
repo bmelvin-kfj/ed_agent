@@ -148,32 +148,33 @@ def _resolve_latest_export_file() -> Path:
 
 
 def _run_full_extraction() -> Path:
-    """Tente d'utiliser la session sauvegardée, puis retombe sur l'auth live si nécessaire."""
+    """Force l'extraction live pour générer l'export, puis retombe sur la session sauvegardée si besoin."""
     os.chdir(BASE_DIR)
+
+    try:
+        username, password = load_credentials()
+        manager = EcoleDirecteSessionManager(username, password)
+        manager.run_auth_workflow()
+
+        time.sleep(5)
+        output_path = _resolve_latest_export_file()
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+        raise RuntimeError("Aucun export JSON valide n'a été trouvé après l'extraction live.")
+    except Exception as exc:
+        print(f"[session] Échec du flux live : {exc}")
 
     if TOKEN_SAVED_FILE.exists():
         try:
             saved = json.loads(TOKEN_SAVED_FILE.read_text(encoding="utf-8"))
             token = saved.get("token") or (saved.get("headers") or {}).get("X-Token")
             if token:
-                print("[session] Session sauvegardée détectée ; utilisation du flux de données existant.")
-                try:
-                    return _run_data_extract()
-                except Exception as exc:
-                    print(f"[session] Échec du flux sauvegardé : {exc}")
-        except Exception as exc:
-            print(f"[session] Session sauvegardée invalide : {exc}")
+                print("[session] Repli sur la session sauvegardée.")
+                return _run_data_extract()
+        except Exception as fallback_exc:
+            print(f"[session] Repli sauvegardé impossible : {fallback_exc}")
 
-    print("[session] Aucune session valide trouvée ; tentative d'authentification live.")
-    username, password = load_credentials()
-    manager = EcoleDirecteSessionManager(username, password)
-    manager.run_auth_workflow()
-
-    time.sleep(5)
-    output_path = _resolve_latest_export_file()
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        raise RuntimeError("Aucun export JSON valide n'a été trouvé après l'extraction live.")
-    return output_path
+    raise RuntimeError("Impossible de générer l'export ni via l'extraction live ni via la session sauvegardée.")
 
 
 @app.get("/data")
@@ -857,6 +858,14 @@ class EcoleDirecteSessionManager:
     def _human_delay(self, min_ms: int = 1000, max_ms: int = 2000) -> None:
         time.sleep(random.randint(min_ms, max_ms) / 1000.0)
 
+    def _wait_for_token_capture(self, timeout_seconds: float = 8.0) -> None:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.extracted_token:
+                return
+            time.sleep(0.25)
+        raise EcoleDirecteAuthError("Accueil atteint, mais aucun X-Token n'a ete intercepte.")
+
     def _handle_response(self, response: Response) -> None:
         if "api.ecoledirecte.com" not in response.url:
             return
@@ -1032,9 +1041,7 @@ class EcoleDirecteSessionManager:
                     print("[OK] Accueil atteint sans double authentification.")
 
                 self._human_delay(1500, 2500)
-
-                if not self.extracted_token:
-                    raise EcoleDirecteAuthError("Accueil atteint, mais aucun X-Token n'a ete intercepte.")
+                self._wait_for_token_capture(8.0)
 
                 account_id = self._get_account_id(page)
                 session_config = {
