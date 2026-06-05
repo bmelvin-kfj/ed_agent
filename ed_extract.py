@@ -44,8 +44,9 @@ USER_AGENT = (
 )
 
 DASHBOARD_SELECTORS = (
-    ".home-page, .dashboard, .main-content, #page-accueil, "
-    "main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]"
+    ".home-page, .dashboard, #page-accueil, "
+    "[data-testid*=dashboard], [class*=dashboard], [id*=accueil], "
+    "[class*=accueil], [class*=home-page]"
 )
 
 
@@ -148,33 +149,18 @@ def _resolve_latest_export_file() -> Path:
 
 
 def _run_full_extraction() -> Path:
-    """Force l'extraction live pour générer l'export, puis retombe sur la session sauvegardée si besoin."""
+    """Force la vraie extraction live complète pour générer l'export demandé."""
     os.chdir(BASE_DIR)
 
-    try:
-        username, password = load_credentials()
-        manager = EcoleDirecteSessionManager(username, password)
-        manager.run_auth_workflow()
+    username, password = load_credentials()
+    manager = EcoleDirecteSessionManager(username, password)
+    manager.run_auth_workflow()
 
-        time.sleep(5)
-        output_path = _resolve_latest_export_file()
-        if output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
+    time.sleep(5)
+    output_path = _resolve_latest_export_file()
+    if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("Aucun export JSON valide n'a été trouvé après l'extraction live.")
-    except Exception as exc:
-        print(f"[session] Échec du flux live : {exc}")
-
-    if TOKEN_SAVED_FILE.exists():
-        try:
-            saved = json.loads(TOKEN_SAVED_FILE.read_text(encoding="utf-8"))
-            token = saved.get("token") or (saved.get("headers") or {}).get("X-Token")
-            if token:
-                print("[session] Repli sur la session sauvegardée.")
-                return _run_data_extract()
-        except Exception as fallback_exc:
-            print(f"[session] Repli sauvegardé impossible : {fallback_exc}")
-
-    raise RuntimeError("Impossible de générer l'export ni via l'extraction live ni via la session sauvegardée.")
+    return output_path
 
 
 @app.get("/data")
@@ -902,7 +888,7 @@ class EcoleDirecteSessionManager:
         page.wait_for_function(
             r"""
             homeUrlFragment => {
-                const dashboardSelector = ".home-page, .dashboard, .main-content, #page-accueil, main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]";
+                const dashboardSelector = ".home-page, .dashboard, #page-accueil, [data-testid*=dashboard], [class*=dashboard], [id*=accueil], [class*=accueil], [class*=home-page]";
                 return Boolean(
                     document.querySelector("#formQuestions2FA")
                     || document.querySelector(dashboardSelector)
@@ -922,7 +908,7 @@ class EcoleDirecteSessionManager:
             page.wait_for_function(
                 r"""
                 () => Boolean(
-                    document.querySelector(".home-page, .dashboard, .main-content, #page-accueil, main, [data-testid*=dashboard], [class*=dashboard], [id*=accueil]")
+                    document.querySelector(".home-page, .dashboard, #page-accueil, [data-testid*=dashboard], [class*=dashboard], [id*=accueil], [class*=accueil], [class*=home-page]")
                     || /\/Eleves\/\d+(?:\/|$)/.test(location.href)
                 )
                 """,
