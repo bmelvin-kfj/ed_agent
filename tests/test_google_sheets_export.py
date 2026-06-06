@@ -47,5 +47,6 @@ def test_upload_export_to_google_sheets_uses_service_account(monkeypatch, tmp_pa
     assert result["enabled"] is True
     assert captured["spreadsheetId"] == "sheet-id-123"
     assert captured["range"] == "Exports!A1"
-    assert captured["body"]["values"][0][0].startswith("Export JSON")
+    assert any("\"ok\": true" in row[0] for row in captured["body"]["values"])
+    assert any("{\"ok\": true" in row[0] or row[0] == "{" for row in captured["body"]["values"])
     assert captured["executed"] is True

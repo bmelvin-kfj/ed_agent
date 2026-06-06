@@ -181,9 +181,9 @@ def _upload_export_to_google_sheets(export_path: Path) -> dict[str, Any]:
         sheets_service = build("sheets", "v4", credentials=credentials)
 
         export_text = export_path.read_text(encoding="utf-8")
-        summary = export_text[:4000]
+        pretty_json = json.dumps(json.loads(export_text), indent=2, ensure_ascii=False)
         body = {
-            "values": [[f"Export JSON {time.strftime('%Y-%m-%d %H:%M:%S')}", summary]],
+            "values": [[line] for line in pretty_json.splitlines()],
         }
         range_name = os.getenv("GOOGLE_SHEETS_RANGE", "Exports!A1").strip() or "Exports!A1"
 
