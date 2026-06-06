@@ -22,6 +22,13 @@ except ImportError as exc:
         "Puis installez le navigateur : python -m playwright install chromium"
     ) from exc
 
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+except ImportError:
+    service_account = None
+    build = None
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -146,6 +153,56 @@ def _resolve_latest_export_file() -> Path:
     if not exports:
         raise RuntimeError("Aucun fichier d'export trouvé dans le dossier exports/.")
     return exports[0]
+
+
+def _upload_export_to_google_sheets(export_path: Path) -> dict[str, Any]:
+    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "").strip()
+    if not spreadsheet_id:
+        return {"enabled": False, "reason": "GOOGLE_SHEETS_SPREADSHEET_ID non configuré."}
+
+    if service_account is None or build is None:
+        return {"enabled": False, "reason": "google-auth / google-api-python-client non installés."}
+
+    credentials_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    credentials_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+
+    try:
+        if credentials_json:
+            credentials_info = json.loads(credentials_json)
+        elif credentials_file and Path(credentials_file).exists():
+            credentials_info = json.loads(Path(credentials_file).read_text(encoding="utf-8"))
+        else:
+            raise RuntimeError("Aucune credentiel Google Sheets disponible. Définissez GOOGLE_SERVICE_ACCOUNT_JSON ou GOOGLE_SERVICE_ACCOUNT_FILE.")
+
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        sheets_service = build("sheets", "v4", credentials=credentials)
+
+        export_text = export_path.read_text(encoding="utf-8")
+        summary = export_text[:4000]
+        body = {
+            "values": [[f"Export JSON {time.strftime('%Y-%m-%d %H:%M:%S')}", summary]],
+        }
+        range_name = os.getenv("GOOGLE_SHEETS_RANGE", "Exports!A1").strip() or "Exports!A1"
+
+        result = (
+            sheets_service.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=spreadsheet_id,
+                range=range_name,
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body=body,
+            )
+            .execute()
+        )
+
+        return {"enabled": True, "spreadsheet_id": spreadsheet_id, "range": range_name, "result": result}
+    except Exception as exc:
+        return {"enabled": False, "error": str(exc)}
 
 
 def _run_full_extraction() -> Path:
@@ -837,6 +894,10 @@ class EcoleDirecteExtractor:
         EXPORT_DIR.mkdir(exist_ok=True)
         output_path = EXPORT_DIR / f"ecoledirecte_export_{time.strftime('%Y%m%d_%H%M%S')}.json"
         output_path.write_text(json.dumps(export, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+        sheet_result = _upload_export_to_google_sheets(output_path)
+        print(f"[google-sheets] {'ok' if sheet_result.get('enabled') else 'ignored'}: {sheet_result}")
+
         return output_path.resolve()
 
 
