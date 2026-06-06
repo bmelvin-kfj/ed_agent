@@ -1056,9 +1056,28 @@ class EcoleDirecteSessionManager:
 
                 return session_config
             finally:
+                try:
+                    if hasattr(context, "clear_cookies"):
+                        context.clear_cookies()
+                    if hasattr(context, "clear_permissions"):
+                        context.clear_permissions()
+                except Exception as exc:
+                    print(f"[warn] Nettoyage des cookies impossible : {exc}")
+
+                try:
+                    if TOKEN_SAVED_FILE.exists():
+                        TOKEN_SAVED_FILE.unlink()
+                except Exception as exc:
+                    print(f"[warn] Suppression de la session sauvegardee impossible : {exc}")
+
                 print("Fermeture du navigateur...")
-                context.close()
-                browser.close()
+                try:
+                    context.close()
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
 
 
 def load_credentials() -> tuple[str, str]:
