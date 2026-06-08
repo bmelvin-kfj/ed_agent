@@ -186,6 +186,13 @@ def _upload_export_to_google_sheets(export_path: Path) -> dict[str, Any]:
             "values": [[line] for line in pretty_json.splitlines()],
         }
         range_name = os.getenv("GOOGLE_SHEETS_RANGE", "Exports!A1").strip() or "Exports!A1"
+        clear_range = range_name.split("!", 1)[0] if "!" in range_name else range_name
+
+        sheets_service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=clear_range,
+            body={},
+        ).execute()
 
         result = (
             sheets_service.spreadsheets()

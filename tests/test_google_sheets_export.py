@@ -23,6 +23,12 @@ def test_upload_export_to_google_sheets_uses_service_account(monkeypatch, tmp_pa
         def values(self):
             return self
 
+        def clear(self, spreadsheetId, range, body):
+            captured["clear_spreadsheetId"] = spreadsheetId
+            captured["clear_range"] = range
+            captured["clear_body"] = body
+            return self
+
         def append(self, spreadsheetId, range, valueInputOption, insertDataOption, body):
             captured["spreadsheetId"] = spreadsheetId
             captured["range"] = range
@@ -47,6 +53,8 @@ def test_upload_export_to_google_sheets_uses_service_account(monkeypatch, tmp_pa
     assert result["enabled"] is True
     assert captured["spreadsheetId"] == "sheet-id-123"
     assert captured["range"] == "Exports!A1"
+    assert captured["clear_spreadsheetId"] == "sheet-id-123"
+    assert captured["clear_range"] == "Exports"
     assert any("\"ok\": true" in row[0] for row in captured["body"]["values"])
     assert any("{\"ok\": true" in row[0] or row[0] == "{" for row in captured["body"]["values"])
     assert captured["executed"] is True
